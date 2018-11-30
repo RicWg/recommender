@@ -1,0 +1,118 @@
+---
+title: "Coding4_recommender"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Description
+This project is to implement 2 recommender models based on MovieLens 1M dataset
+
+```{r, echo=TRUE, message=FALSE, , warning=FALSE}
+rm(list = ls())
+# mypackages = c("dplyr", "recommenderlab", "reshape2")   # required packages
+# tmp = setdiff(mypackages, rownames(installed.packages()))  # packages need to be installed
+# if (length(tmp) > 0) install.packages(tmp)
+# lapply(mypackages, require, character.only = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(recommenderlab)  
+library(reshape2)
+library(Metrics)
+
+# ratings data
+# use colClasses = 'NULL' to skip columns
+ratings = read.csv('ratings.dat', sep = ':', 
+                   colClasses = c('integer', 'NULL'), header = FALSE)
+colnames(ratings) = c('user', 'movie', 'rating', 'timestamp')
+print(dim(ratings)) # 1000209-by-4
+
+movies = readLines('movies.dat')
+movies = strsplit(movies, split = "::", fixed = TRUE, useBytes = TRUE)
+movies = matrix(unlist(movies), ncol = 3, byrow = TRUE)
+movies = data.frame(movies, stringsAsFactors = FALSE)
+colnames(movies) = c('movie', 'title', 'genre')
+movies$MovieID = as.integer(movies$movie)
+movies$genre = ifelse(grepl('\\|', movies$genre), "Multiple", 
+                       movies$genre)
+rating_merged = merge(x = ratings, y = movies, by.x = "movie")
+mvlist = unique(rating_merged$movie)
+
+#Prepare training and test data
+set.seed(1046)
+ratings$timestamp = NA
+pred.id <- sample(nrow(ratings),floor(nrow(ratings)) * 0.8)
+train.id <- sample(length(pred.id),floor(length(pred.id)) * 0.75)
+train = ratings[train.id, ]
+pred = ratings[pred.id,]
+test = ratings[-pred.id,]
+
+mvtrain = unique(train$movie)
+mvtrainpatch = mvlist[which(!mvlist %in% mvtrain)]
+train = rbind(train,cbind(user=c(1),movie=c(mvtrainpatch), rating=c(NA), timestamp=c(NA)))
+#Create a utility matrix:
+Rtrain = acast(train, user ~ movie, value.var='rating')
+Rtrain = as(Rtrain, 'realRatingMatrix')
+print(dim(Rtrain)) 
+
+#prediction
+mvpred = unique(pred$movie)
+mvpredpatch = mvlist[which(!mvlist %in% mvpred)]
+pred = rbind(pred,cbind(user=c(1),movie=c(mvpredpatch), rating=c(NA), timestamp=c(NA)))
+Rpred = acast(pred, user~movie, value.var='rating')
+Rpred = as(Rpred, 'realRatingMatrix')
+print(dim(Rpred))               
+
+```
+
+First model: User based collaborative filtering, nomalized by z-score, use Cosine as similarity method 
+
+```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
+rec = Recommender(Rtrain, method = 'UBCF',
+                  parameter = list(normalize = 'Z-score', method = 'Cosine', nn = 5) )
+
+#predict
+recom = predict(rec, Rpred, type = 'ratings')  
+rec_list = as(recom, 'list')  
+
+testpred = test 
+for (u in 1:nrow(testpred)) {  
+  userid = as.character(testpred$user[u])
+  movieid = as.character(testpred$movie[u])
+  if (exists(userid, where=rec_list)) {
+    rating = rec_list[[userid]][movieid]
+    testpred$rating[u] = ifelse(is.na(rating), 2.5, rating) 
+  }
+}
+#evaluation
+final = merge(ratings, testpred, by.x=c("user", "movie"), by.y=c("user", "movie"))
+cat("UBCF model rmse: ", rmse(final$rating.x, final$rating.y) )
+
+```
+
+Second model: IBCF model, nomalized bt Z-score, an cosine as the similarity method 
+
+```{r , echo=TRUE, message=FALSE, warning=FALSE}
+rec2 = Recommender(Rtrain, method = 'IBCF',
+                  parameter = list(normalize = 'Z-score', method = 'Cosine'))
+#predict
+recom = predict(rec2, Rpred, type = 'ratings')  
+rec_list = as(recom, 'list')  
+
+testpred = test 
+for (u in 1:nrow(testpred)) {  
+  userid = as.character(testpred$user[u])
+  movieid = as.character(testpred$movie[u])
+  if (exists(userid, where=rec_list)) {
+    rating = rec_list[[userid]][movieid]
+    testpred$rating[u] = ifelse(is.na(rating), 2.5, rating) 
+  }
+}
+#evaluation
+final = merge(ratings, testpred, by.x=c("user", "movie"), by.y=c("user", "movie"))
+cat("IBCF model rmse: ", rmse(final$rating.x, final$rating.y))
+
+```
